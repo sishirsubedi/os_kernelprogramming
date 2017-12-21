@@ -1,0 +1,259 @@
+#include "assert.H"
+#include "exceptions.H"
+#include "console.H"
+#include "paging_low.H"
+#include "page_table.H"
+
+
+PageTable * PageTable::current_page_table = NULL;
+unsigned int PageTable::paging_enabled = 0;
+ContFramePool * PageTable::kernel_mem_pool = NULL;
+ContFramePool * PageTable::process_mem_pool = NULL;
+unsigned long PageTable::shared_size = 0;
+
+
+
+void PageTable::init_paging(ContFramePool * _kernel_mem_pool,
+                            ContFramePool * _process_mem_pool,
+                            const unsigned long _shared_size)
+{
+
+   PageTable::kernel_mem_pool = _kernel_mem_pool;
+   PageTable::process_mem_pool = _process_mem_pool; 
+   PageTable::shared_size = _shared_size;
+
+
+   // assert(false);
+   Console::puts("Initialized Paging System\n");
+}
+
+PageTable::PageTable()
+{
+
+   // here we need to initialize location for the page directory
+    // so page directory will ask kernel memory pool to get frames.
+	page_directory = (unsigned long *) (process_mem_pool->get_frames(1) * PAGE_SIZE);
+
+
+unsigned long page_directory_initialization = 0;
+
+for ( unsigned int j = 0 ; j<ENTRIES_PER_PAGE;j++){
+	page_directory[j]= page_directory_initialization | 2;// mark NOT present
+
+	// Console::puti((unsigned long) page_directory[j]);
+    }
+
+// point last entry in the page directory to itself and mark it present
+  page_directory[1023] =  (unsigned long) page_directory;
+  page_directory[1023] =  page_directory[1023] |3;// make these read/write and valid
+
+
+// now add page table for first entry in page directory for <4mb
+// similarly page table aslo needs one frame from the kernel mem pool
+
+  unsigned long  * page_table = (unsigned long *) (process_mem_pool->get_frames(1) * PAGE_SIZE);
+
+ //Console::puts(" Location of page_directory : ");
+ //Console::puti((unsigned long) page_directory);
+  //Console::puts("\n");
+   //assert(false);
+   
+
+  //Console::puts(" Location of page_table : ");
+ //Console::puti((unsigned long) page_table);
+  //Console::puts("\n");
+
+
+//
+// to initialize first page table with directly physical address 
+// 1024 entried of each frame of 4kb size = 4096 kb = 4mb
+ // so this section maps until 4mb memory directly to physical address
+unsigned long page_initialization = 0;
+
+for ( unsigned int i =0; i<ENTRIES_PER_PAGE;i++){
+ 	page_table[i] = page_initialization | 3; // mark last 1 as 001 to mark read only and valid
+ 	page_initialization = page_initialization + PAGE_SIZE;
+ 	 //Console::puti((unsigned long) page_table[i]);
+ }
+
+  // assign above create page table as the first entry in the page directory
+  page_directory[0] =  (unsigned long) page_table;
+  page_directory[0] =  page_directory[0] |3;// make these read/write and valid
+//  Console::puts(" Location of page_directory[0] : ");
+//  Console::puti((unsigned long) &page_directory[0]);
+//   Console::puts("\n");
+
+ //Console::puts(" value of page_directory[0] : ");
+  //Console::puti((unsigned long) page_directory[0]);
+   //Console::puts("\n");
+
+
+
+
+ //  Console::puts(" value of page_table[10] : ");
+ // Console::puti((unsigned long) page_table[10]);
+ //  Console::puts("\n");
+
+ //  Console::puts(" value of page_directory[10] : ");
+ //  Console::puti((unsigned long) page_directory[10]);
+ //   Console::puts("\n");
+
+for(unsigned int i=0; i<VM_ARRAY_SIZE; i++)
+    {
+        vmpool_array[i] = NULL;
+    }
+
+}
+
+void PageTable::load()
+{
+ current_page_table = this;
+ write_cr3 ((unsigned long) page_directory); // write page directory location to register cr3 
+ 
+ 
+   //assert(false);
+   //Console::puts("Loaded page table\n");
+}
+
+void PageTable::enable_paging()
+{
+
+paging_enabled = 1;
+
+
+// change the cr0 register bit to mark that paging is enabled
+unsigned long temp = read_cr0();
+
+
+temp = temp | 0x80000000;
+
+write_cr0(temp);
+
+//write_cr0(read_cr0() | 0x80000000);
+
+   //assert(false);
+  // Console::puts("Enabled paging\n");
+//Console::puts(" value of :(unsigned long) read_cr0():: ");
+//Console::puti(temp);
+//Console::puts("\n");
+
+//for(;;);
+}
+
+
+
+
+
+
+void PageTable::handle_fault(REGS * _r)
+{ 
+
+// read the address of page table index that is faulted
+unsigned long cr2_message = read_cr2();
+// use this address to calculated page directory index and page table index
+unsigned long page_directory_index = (cr2_message>>22);
+unsigned long page_table_index = (cr2_message>>12);// & 0x3FF);
+ 
+//  Console::puts(" cr2 message: ");
+//   Console::puti(cr2_message >> 22 );
+//    Console::puts("\n");
+
+
+//  unsigned long cr0_message = read_cr0();
+ 
+//  Console::puts(" cr0 message: ");
+//   Console::puti(cr0_message >> 22 );
+//    Console::puts("\n");
+
+
+// get the page directory of current page 
+// as this is static we need to get page directory using cr3 register
+unsigned long * temp_page_directory = (unsigned long * ) read_cr3(); //= current_page_table->page_directory;
+
+// get the page table in that specific page directory causing page fault
+unsigned long * temp_page_table;// = (unsigned long *) temp_page_directory[page_directory_index];
+
+//  Console::puts(" temp page directory : ");
+//   Console::puti((unsigned long) temp_page_directory);
+//    Console::puts("\n");
+
+
+//  Console::puts(" temp directory address : ");
+//   Console::puti((unsigned long)   &temp_page_directory );
+//    Console::puts("\n");
+ //
+
+// Console::puts(" temp_page_directory[cr2_message]: ");
+//   Console::puti((unsigned long)   temp_page_directory[cr2_message] );
+//    Console::puts("\n");
+  
+
+
+  
+  //exit(0);
+
+      VMPool** vm_array=current_page_table->vmpool_array;
+      int vm_index=-1;
+      for(unsigned int i=0;i<VM_ARRAY_SIZE;++i)
+            if(vm_array[i]!=NULL){
+                if (vm_array[i]->is_legitimate(cr2_message)){
+                    vm_index=i;
+                    break;
+                    }
+            }
+      if (vm_index<0)
+            Console::puts("INVALID ADDRESS\n");
+
+
+  //assert(false);
+  //Console::puts("handled page fault\n");
+
+
+if(temp_page_directory[page_directory_index] & 1 ==1)
+{
+	temp_page_table = (unsigned long *) (0xFFC00000 |( page_directory_index));
+
+	temp_page_table[page_table_index]= (PageTable::process_mem_pool->get_frames(1) * PAGE_SIZE)|3;
+}
+else
+{
+
+temp_page_directory[page_directory_index] = (unsigned long )((PageTable::process_mem_pool->get_frames(1)*PAGE_SIZE)|3);
+
+for(int i=0; i<1024;i++){
+	temp_page_table[i]=0|2;
+}
+temp_page_table[page_table_index] = (PageTable::process_mem_pool->get_frames(1) * PAGE_SIZE)|3;
+
+}
+
+}
+
+
+void PageTable::register_pool(VMPool * _pool){
+
+        int index=-1;
+        for (unsigned int i=0;i<VM_ARRAY_SIZE;++i) //find empty index for vmpool
+            if (vmpool_array[i]==NULL)
+                index=i;
+        if (index>=0){
+            vmpool_array[index]=_pool;//register pool
+            Console::puts("register vmpool is successful\n");//report error if you cant register
+
+        }
+        else
+            Console::puts("ERR register VMPool failed, array is full\n");//report error if you cant register
+
+}
+    
+void PageTable::free_page(unsigned long _page_no){
+
+unsigned long directory_idex = _page_no >> 22;
+	unsigned long page_index = (_page_no >> 12) & 0x3FF;
+	unsigned long* page_table = (unsigned long*)(0xFFC00000 | (directory_idex << 12));
+    unsigned long frame_number= page_table[page_index];
+process_mem_pool->release_frames(frame_number);
+
+}
+
+
